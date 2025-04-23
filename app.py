@@ -1,139 +1,117 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-import requests
-import os
 import pandas as pd
+import os
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 app = Flask(__name__)
 
-# Get Gemini API key
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Load Excel catalog once
+CATALOG_PATH = "Data/nima_gear_catalog.xlsx"
+catalog_df = pd.read_excel(CATALOG_PATH)
 
-# Load Excel catalog
-def load_gear_catalog():
-    return pd.read_excel("Data/nima_gear_catalog.xlsx")
+# Simple in-memory session store
+sessions = {}  # Format: { phone_number: { 'last_query': '', 'matches': [], 'page': 0 } }
 
-# Match product based on user message
-def match_product(user_input, df):
+# Match products using Excel data
+def match_products(user_input):
     message = user_input.lower()
     show_rent = any(word in message for word in ["rent", "borrow", "kiraye"])
 
-    filtered = df[df.apply(
+    filtered = catalog_df[catalog_df.apply(
         lambda row: (
             row['Category'].lower() in message or
             str(row['Subcategory']).lower() in message or
             str(row['Type']).lower() in message
         ), axis=1)]
 
-    if not filtered.empty:
-        product = filtered.iloc[0]
-        return {
-            "model": product["Model"],
-            "category": product["Category"],
-            "type": product["Type"],
-            "people": product.get("People/Size", ""),
-            "price": product["Buy Price"],
-            "rent_price": product["Rent Price"] if show_rent else None,
-            "stock": product["Instock"],
-            "image": product.get("Image URL", None)
-        }
-    return None
+    # Sort by stock: in-stock first
+    filtered = filtered.sort_values(by='Instock', ascending=False)
 
-# Gemini context prompt
-context = """
-You are Nima, a warm, friendly assistant for The North Gear Kashmir — a premium outdoor and adventure gear store in Kashmir.
+    results = []
+    for _, row in filtered.iterrows():
+        results.append({
+            "model": row["Model"],
+            "category": row["Category"],
+            "type": row["Type"],
+            "people": row.get("People/Size", ""),
+            "price": row["Buy Price"],
+            "rent_price": row["Rent Price"] if show_rent else None,
+            "stock": row["Instock"],
+            "image": row.get("Image URL", None)
+        })
 
-Your job is to help users by:
-- Recommending products based on their queries and what’s available in the Excel catalog.
-- Showing buy prices by default, but mentioning rent prices only if the user clearly asks (e.g., rent, borrow, kiraye).
-- Using product details like category, subcategory, model, size or people count, and price to tailor suggestions.
-- Checking the Instock column to confirm availability before recommending.
-- Speaking naturally like a helpful shop assistant — short replies, friendly tone, and Hinglish if needed.
-- Never sounding robotic. Be precise, proactive, and pleasant.
+    return results
 
-Store info:
-- Open Mon–Sat, 9 AM–7 PM
-- Delivery in Srinagar available
-- Payments: UPI, cash, bank transfer
-"""
+# Format a single product for messaging
+def format_product(idx, p):
+    return f"""{idx+1}. {p['model']} ({p['category']} - {p['type']})
+👥 Size: {p['people']}
+💸 Price: {p['price']}
+{f'💼 Rent: {p["rent_price"]}' if p["rent_price"] else ''}
+📦 Stock: {p['stock']}"""
 
-# Combine context + product
-def build_prompt(user_message, matched_product):
-    if matched_product:
-        product_text = f"""
-        Product match:
-        - Model: {matched_product['model']}
-        - Category: {matched_product['category']}
-        - Type: {matched_product['type']}
-        - People/Size: {matched_product['people']}
-        - Price: {matched_product['price']}
-        {'- Rent Price: ' + matched_product['rent_price'] if matched_product['rent_price'] else ''}
-        - Stock: {matched_product['stock']}
-        """
-        return f"{context}\n\n{product_text}\n\nCustomer: {user_message}"
-    else:
-        return f"{context}\n\nCustomer: {user_message}"
-
-# Call Gemini
-def get_gemini_response(user_message):
-    print("📨 User message received by Gemini function:", user_message)
-    print("🔑 Gemini API Key in use:", GEMINI_API_KEY)
-    
-    df = load_gear_catalog()
-    match = match_product(user_message, df)
-    prompt = build_prompt(user_message, match)
-
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ]
-    }
-
-    response = requests.post(url, headers=headers, json=data)
-
-    print("\n--- Gemini Full API Response ---")
-    print("Status Code:", response.status_code)
-    print(response.text)
-    print("--- End Response ---\n")
-
-    try:
-        gemini_reply = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return gemini_reply, match
-    except Exception as e:
-        print("Error parsing Gemini response:", e)
-        return "Oops! Couldn't get a smart reply. Try again later.", None
-
-
-# WhatsApp webhook
+# WhatsApp webhook route
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
-    print("✅ WhatsApp message received")  
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = request.values.get("Body", "").strip().lower()
+    sender = request.values.get("From")
+    user = sender.replace("whatsapp:", "")
     resp = MessagingResponse()
-    reply = resp.message()
 
-    if incoming_msg:
-        bot_response, match = get_gemini_response(incoming_msg)
-        reply.body(bot_response)
+    # Setup session
+    if user not in sessions:
+        sessions[user] = {"last_query": "", "matches": [], "page": 0}
 
-        if match and match['image']:
-            reply.media(match['image'])
+    session = sessions[user]
+
+    # If user types "more"
+    if incoming_msg == "more" and session["matches"]:
+        session["page"] += 1
+
+    # If user selects a number from previous list
+    elif incoming_msg.isdigit() and session["matches"]:
+        index = int(incoming_msg) - 1
+        if 0 <= index < len(session["matches"]):
+            item = session["matches"][index]
+            msg = resp.message(format_product(index, item))
+            if item.get("image"):
+                msg.media(item["image"])
+            return str(resp)
+        else:
+            resp.message("Invalid selection. Please reply with a valid number.")
+            return str(resp)
+
+    # If it's a new search query
     else:
-        reply.body("Hi! I'm Nima, your AI assistant. How can I help you today?")
+        session["page"] = 0
+        session["matches"] = match_products(incoming_msg)
+        session["last_query"] = incoming_msg
+
+    # Paginate results
+    page_size = 5
+    start = session["page"] * page_size
+    end = start + page_size
+    page_items = session["matches"][start:end]
+
+    if not page_items:
+        resp.message("No items found or end of list reached. Try a new query.")
+        return str(resp)
+
+    for i, item in enumerate(page_items, start=start):
+        msg = resp.message(format_product(i, item))
+        if item.get("image"):
+            msg.media(item["image"])
+
+    if end < len(session["matches"]):
+        resp.message("Reply with 'more' to see more options or reply with a number (e.g. 1, 2) to select.")
 
     return str(resp)
 
-# Run the Flask app
+# Start the Flask server
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
-
