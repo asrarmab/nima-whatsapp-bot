@@ -7,4 +7,10 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         value: AIzaSyA7fJdfata9DBuQV54mXw0zLKI0fCePbJc
-
+    buildFilter:
+      paths:
+        - app.py
+        - requirements.txt
+        - render.yaml
+        - data/**
+        - data/nima_gear_catalog.xlsx
