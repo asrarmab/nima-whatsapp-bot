@@ -79,9 +79,10 @@ def build_prompt(user_message, matched_product):
         return f"{context}\n\nCustomer: {user_message}"
 
 # Call Gemini
-    def get_gemini_response(user_message):
+def get_gemini_response(user_message):
     print("📨 User message received by Gemini function:", user_message)
     print("🔑 Gemini API Key in use:", GEMINI_API_KEY)
+    
     df = load_gear_catalog()
     match = match_product(user_message, df)
     prompt = build_prompt(user_message, match)
@@ -111,6 +112,7 @@ def build_prompt(user_message, matched_product):
     except Exception as e:
         print("Error parsing Gemini response:", e)
         return "Oops! Couldn't get a smart reply. Try again later.", None
+
 
 # WhatsApp webhook
 @app.route("/whatsapp", methods=["POST"])
