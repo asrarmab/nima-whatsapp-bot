@@ -15,7 +15,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Load Excel catalog
 def load_gear_catalog():
-    return pd.read_excel("nima_gear_catalog.xlsx")
+    return pd.read_excel("data/nima_gear_catalog.xlsx")
 
 # Match product based on user message
 def match_product(user_input, df):
