@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 import difflib
 import re
 import time
+import json
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -13,60 +15,93 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 app = Flask(__name__)
 
-# Load Excel catalog
+# Excel catalog setup
 CATALOG_PATH = "Data/nima_gear_catalog.xlsx"
 catalog_df = pd.read_excel(CATALOG_PATH)
 all_categories = ", ".join(catalog_df["Category"].dropna().unique())
 
-# Session store
+# In-memory session
 sessions = {}
 
-# Synonyms (excluding raincoat <-> jacket)
-synonyms = {
-    "joote": "boots",
-    "shoes": "boots",
-    "shooz": "boots",
-    "shose": "boots",
-    "thermal": "jacket",
-    "coat": "jacket",
-    "gloves": "accessory",
-    "mittens": "gloves",
-    "tandoor": "stove",
-    "burner": "stove",
-    "backpack": "bag",
-    "rucksack": "bag",
-    "tent house": "tent",
-    "camper": "tent",
-    "bagpack": "bag",
-    "bottle": "accessory"
+# System prompt for Gemini
+GEMINI_SYSTEM_PROMPT = """
+You are Nima, a smart and warm-hearted assistant working for The North Gear Kashmir — a premium outdoor and winter gear store in Kashmir.
+
+Your ONLY job is to help users with product-related queries such as jackets, tents, boots, gloves, stoves, and similar gear.
+
+If a user asks anything off-topic (like writing code, telling jokes, or anything not related to outdoor gear), politely say:
+"I'm here to help you with adventure gear. Let me know what you're looking for 😊"
+
+Always extract and respond with a structured summary of the user’s intent and key product preferences. For example:
+
+Input: “Mujhe -10 wali jacket chahiye under 3000”
+→ Output:
+{
+  "intent": "product_search",
+  "category": "jacket",
+  "subcategory": "-10",
+  "price_limit": 3000,
+  "language": "hindi"
 }
 
-def normalize_message(msg):
-    words = msg.split()
-    final_words = []
-    for word in words:
-        if word in synonyms:
-            final_words.append(synonyms[word])
-        else:
-            close = difflib.get_close_matches(word, synonyms.keys(), n=1, cutoff=0.85)
-            if close:
-                final_words.append(synonyms[close[0]])
-            else:
-                final_words.append(word)
-    return " ".join(final_words)
+Input: “What do you guys sell?”
+→ Output:
+{
+  "intent": "show_categories"
+}
 
-def match_products(user_input):
-    message = normalize_message(user_input.lower())
-    show_rent = any(word in message for word in ["rent", "borrow", "kiraye"])
-    price_matches = re.findall(r"\d{3,5}", message)
-    price_limit = int(price_matches[0]) if price_matches else None
+Input: “Where is your store?”
+→ Output:
+{
+  "intent": "store_info"
+}
 
-    filtered = catalog_df[catalog_df.apply(
-        lambda row: (
-            row['Category'].lower() in message or
-            str(row['Subcategory']).lower() in message or
-            str(row['Type']).lower() in message
-        ), axis=1)]
+Input: “Any discount?”
+→ Output:
+{
+  "intent": "discount_request"
+}
+
+Input: “chutye”, “you guys are scammers”
+→ Output:
+{
+  "intent": "abuse"
+}
+
+If you are not sure, return:
+{ "intent": "unknown" }
+
+Always respond in pure JSON — no extra text, comments, or explanations.
+"""
+
+# Gemini intent parser
+def query_gemini_intent(user_input):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "contents": [{
+            "parts": [
+                { "text": GEMINI_SYSTEM_PROMPT },
+                { "text": f"User: {user_input}" }
+            ]
+        }]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        json_output = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return json.loads(json_output)
+    except Exception as e:
+        print("Gemini parsing error:", e)
+        return { "intent": "unknown" }
+
+# Match products
+def match_products(category, subcategory=None, price_limit=None):
+    if not category:
+        return []
+
+    filtered = catalog_df[catalog_df["Category"].str.lower() == category.lower()]
+    if subcategory:
+        filtered = filtered[filtered["Subcategory"].str.lower() == subcategory.lower()]
 
     if price_limit:
         price_filtered = filtered[filtered['Buy Price'] <= price_limit]
@@ -83,47 +118,59 @@ def match_products(user_input):
         results.append({
             "model": row["Model"],
             "category": row["Category"],
-            "type": row["Type"],
+            "type": row.get("Type", ""),
             "people": row.get("People/Size", ""),
-            "price": row["Buy Price"],
-            "rent_price": row["Rent Price"] if show_rent else None,
-            "stock": row["Instock"],
-            "image": row.get("Image URL", None)
+            "price": row.get("Buy Price", "N/A"),
+            "rent_price": row.get("Rent Price", None),
+            "stock": row.get("Instock", "N/A"),
+            "image": row.get("Image URL", None),
+            "warranty": row.get("Warranty", "N/A")
         })
-
     return results
 
+# Format product
 def format_product(idx, p):
-    return f"""{idx+1}. {p['model']} ({p['category']} - {p['type']})
-👥 Size: {p['people']}
-💸 Price: {p['price']}
-{f'💼 Rent: {p["rent_price"]}' if p["rent_price"] else ''}
-📦 Stock: {p['stock']}"""
+    return f"""{idx+1}. {p['model']} ({p['category']} - {p['type']})\n👥 Size: {p['people']}\n💸 Price: {p['price']}\n🛠️ Warranty: {p['warranty']}\n📦 Stock: {p['stock']}\n{f'💼 Rent: {p['rent_price']}' if p['rent_price'] else ''}"""
 
+# WhatsApp webhook
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From")
     user = sender.replace("whatsapp:", "")
     resp = MessagingResponse()
     current_time = time.time()
 
-    if user not in sessions or current_time - sessions[user].get("timestamp", 0) > 900 or incoming_msg in ["hello", "hi", "salaam"]:
-        sessions[user] = {"last_query": "", "matches": [], "page": 0, "timestamp": current_time}
-        resp.message("Hi! I'm Nima from The North Gear Kashmir. What are you looking for today?")
+    if user not in sessions or current_time - sessions[user].get("timestamp", 0) > 900 or incoming_msg.lower() in ["hello", "hi", "salaam"]:
+        sessions[user] = {"matches": [], "page": 0, "timestamp": current_time}
+        resp.message("Assalamualaikum! 😊 Nima bol rahi hoon — The North Gear Kashmir se. Jackets, tents, ya kuch aur chahiye ho toh bataiye!")
         return str(resp)
 
     sessions[user]["timestamp"] = current_time
     session = sessions[user]
 
-    # Show categories on broad question
-    if any(x in incoming_msg for x in ["what do you have", "kya milta", "available items", "show items", "list"]):
+    intent_data = query_gemini_intent(incoming_msg)
+    intent = intent_data.get("intent", "unknown")
+
+    if intent == "show_categories":
         resp.message("Here's what we offer: " + all_categories)
         return str(resp)
 
-    if incoming_msg == "more" and session["matches"]:
+    if intent == "discount_request":
+        resp.message("Discount ke liye aap hamare store pe visit karein ya iss number pe contact karein: +91-9876543210")
+        return str(resp)
+
+    if intent == "store_info":
+        resp.message("Hamari location Srinagar mein hai — delivery available hai. Store visit by appointment hai. Contact karein: +91-9876543210")
+        return str(resp)
+
+    if intent == "abuse":
+        resp.message("Main sirf help karne ke liye hoon 😊 Agar gear chahiye ho, toh zaroor batayein.")
+        return str(resp)
+
+    if incoming_msg.lower() == "more" and session["matches"]:
         session["page"] += 1
-    elif incoming_msg.isdigit() and session["matches"]:
+    elif incoming_msg.lower().isdigit() and session["matches"]:
         index = int(incoming_msg) - 1
         if 0 <= index < len(session["matches"]):
             item = session["matches"][index]
@@ -134,10 +181,13 @@ def whatsapp_reply():
         else:
             resp.message("Invalid selection. Please reply with a valid number.")
             return str(resp)
-    else:
+    elif intent == "product_search":
         session["page"] = 0
-        session["matches"] = match_products(incoming_msg)
-        session["last_query"] = incoming_msg
+        session["matches"] = match_products(
+            category=intent_data.get("category"),
+            subcategory=intent_data.get("subcategory"),
+            price_limit=intent_data.get("price_limit")
+        )
 
     page_size = 5
     start = session["page"] * page_size
