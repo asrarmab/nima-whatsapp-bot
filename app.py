@@ -127,11 +127,17 @@ def match_products(category, subcategory=None, price_limit=None):
             "warranty": row.get("Warranty", "N/A")
         })
     return results
-
 # Format product
 def format_product(idx, p):
-    return f"""{idx+1}. {p['model']} ({p['category']} - {p['type']})\n👥 Size: {p['people']}\n💸 Price: {p['price']}\n🛠️ Warranty: {p['warranty']}\n📦 Stock: {p['stock']}\n{f'💼 Rent: {p['rent_price']}' if p['rent_price'] else ''}"""
-
+    rent_line = f"💼 Rent: {p['rent_price']}" if p['rent_price'] else ""
+    return (
+        f"{idx+1}. {p['model']} ({p['category']} - {p['type']})\n"
+        f"👥 Size: {p['people']}\n"
+        f"💸 Price: {p['price']}\n"
+        f"🛠️ Warranty: {p['warranty']}\n"
+        f"📦 Stock: {p['stock']}\n"
+        f"{rent_line}"
+    )
 # WhatsApp webhook
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
