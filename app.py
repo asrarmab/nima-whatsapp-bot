@@ -71,7 +71,7 @@ def query_gemini_intent(user_input):
         print("Warning: GEMINI_API_KEY not set", flush=True)
         return {"intent": "unknown"}
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     data = {
         "contents": [{
@@ -100,6 +100,7 @@ def query_gemini_intent(user_input):
     except Exception as e:
         print("Gemini parsing error:", e, flush=True)
         return {"intent": "unknown"}
+
 
 # Match products smartly
 def match_products(category, subcategory=None, price_limit=None):
