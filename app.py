@@ -52,9 +52,34 @@ EMOJIS = ["🌽", "⛰️", "🏵️", "🏃‍♂️", "🏕️", "🌄️", "�
 
 # System prompt for Gemini
 GEMINI_SYSTEM_PROMPT = """
-You are Nima, a smart and warm-hearted assistant working for The North Gear Kashmir — a premium outdoor and winter gear store in Kashmir.
-Your ONLY job is to help users with product-related queries.
+You are Nima, an assistant for The North Gear Kashmir — a premium outdoor gear store.
+
+ONLY return responses in JSON format without any explanation or extra text.
+
+Example output:
+{ "intent": "product_search", "category": "jacket", "price_limit": 3000 }
+
+If user says hello or hi, respond with:
+{ "intent": "greeting" }
+
+If user asks for available products, respond with:
+{ "intent": "show_categories" }
+
+If user asks for store address or location, respond with:
+{ "intent": "store_info" }
+
+If user asks about discounts, respond with:
+{ "intent": "discount_request" }
+
+If user abuses or uses rude language, respond with:
+{ "intent": "abuse" }
+
+If you are unsure, respond with:
+{ "intent": "unknown" }
+
+Respond ONLY with valid JSON object as shown above — no extra sentences, no formatting, no markdown, no commentary.
 """
+
 
 # Get personalized greeting for returning customers
 def get_personalized_greeting(user, session):
