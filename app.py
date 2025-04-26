@@ -212,6 +212,8 @@ def whatsapp_reply():
     sender = request.values.get("From", "")
     user = sender.replace("whatsapp:", "") if sender else "Unknown"
 
+    print("Incoming WhatsApp Body:", incoming_msg)
+
     resp = MessagingResponse()
     current_time = time.time()
 
