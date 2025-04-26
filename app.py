@@ -116,6 +116,7 @@ def get_personalized_greeting(user, session):
 
 # Gemini intent parser with better error handling
 def query_gemini_intent(user_input):
+    print("query_gemini_intent called with:", user_input)  # <-- ADD THIS
     if not GEMINI_API_KEY:
         print("Warning: GEMINI_API_KEY not set")
         return {"intent": "unknown"}
