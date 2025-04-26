@@ -83,24 +83,29 @@ def query_gemini_intent(user_input):
     }
 
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=5)
-        print("Gemini raw output:", response.text, flush=True)
+    response = requests.post(url, headers=headers, json=data, timeout=5)
+    print("Gemini raw output:", response.text, flush=True)
 
-        if response.status_code != 200:
-            print(f"Gemini API error: {response.status_code}", flush=True)
-            return {"intent": "unknown"}
-
-        json_output = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(json_output)
-
-    except requests.exceptions.Timeout:
-        print("Gemini API timeout", flush=True)
-        return {"intent": "api_timeout"}
-
-    except Exception as e:
-        print("Gemini parsing error:", e, flush=True)
+    if response.status_code != 200:
+        print(f"Gemini API error: {response.status_code}", flush=True)
         return {"intent": "unknown"}
 
+    gemini_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+    # Try parsing Gemini text as JSON
+    try:
+        return json.loads(gemini_text)
+    except Exception as e:
+        print("Warning: Gemini reply is not JSON, fallback to unknown intent.", flush=True)
+        return {"intent": "unknown"}
+
+except requests.exceptions.Timeout:
+    print("Gemini API timeout", flush=True)
+    return {"intent": "api_timeout"}
+
+except Exception as e:
+    print("Gemini parsing error:", e, flush=True)
+    return {"intent": "unknown"}
 
 # Match products smartly
 def match_products(category, subcategory=None, price_limit=None):
