@@ -125,25 +125,29 @@ def query_gemini_intent(user_input):
     data = {
         "contents": [{
             "parts": [
-                { "text": GEMINI_SYSTEM_PROMPT },
-                { "text": f"User: {user_input}" }
+                {"text": GEMINI_SYSTEM_PROMPT},
+                {"text": f"User: {user_input}"}
             ]
         }]
     }
+
     try:
         response = requests.post(url, headers=headers, json=data, timeout=5)
+        print("Gemini raw output:", response.text)  # 👈 THIS IS THE DEBUG LINE
+
         if response.status_code != 200:
             print(f"Gemini API error: {response.status_code}")
-            return { "intent": "unknown" }
-        
+            return {"intent": "unknown"}
+
         json_output = response.json()["candidates"][0]["content"]["parts"][0]["text"]
         return json.loads(json_output)
+
     except requests.exceptions.Timeout:
         print("Gemini API timeout")
-        return { "intent": "api_timeout" }
+        return {"intent": "api_timeout"}
     except Exception as e:
         print("Gemini parsing error:", e)
-        return { "intent": "unknown" }
+        return {"intent": "unknown"}
 
 # Match products smartly
 def match_products(category, subcategory=None, price_limit=None):
