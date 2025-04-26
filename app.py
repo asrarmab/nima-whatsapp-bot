@@ -92,7 +92,6 @@ def query_gemini_intent(user_input):
 
     gemini_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-    # Try parsing Gemini text as JSON
     try:
         return json.loads(gemini_text)
     except Exception as e:
